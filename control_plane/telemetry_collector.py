@@ -1,13 +1,14 @@
 """Control plane telemetry collector.
 
-This module simulates real infrastructure monitoring by collecting metrics
-from running applications. In a real deployment, this would integrate with
-monitoring systems like Prometheus, CloudWatch, etc.
+This collector keeps the latest runtime telemetry per application.
+It is intentionally contract-aligned and deterministic:
+- no random metric generation
+- supports direct telemetry ingestion from a control plane source
+- exposes current snapshots to the decision pipeline
 """
 
 import time
-import random
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 
@@ -27,35 +28,69 @@ class TelemetryCollector:
 
     def __init__(self):
         self.apps = {
-            "web-app-1": {"replicas": 3},
-            "api-service": {"replicas": 2},
-            "data-processor": {"replicas": 1},
+            "web-app-1": {
+                "replicas": 3,
+                "metrics": {"cpu": 0.72, "memory": 0.61, "error_rate": 0.01, "latency_ms": 180.0},
+            },
+            "api-service": {
+                "replicas": 2,
+                "metrics": {"cpu": 0.35, "memory": 0.48, "error_rate": 0.07, "latency_ms": 420.0},
+            },
+            "data-processor": {
+                "replicas": 1,
+                "metrics": {"cpu": 0.22, "memory": 0.57, "error_rate": 0.0, "latency_ms": 95.0},
+            },
         }
+
+    def register_app(
+        self,
+        app_id: str,
+        replicas: int = 1,
+        initial_metrics: Optional[Dict[str, float]] = None,
+    ):
+        """Register a new application in the control plane telemetry registry."""
+        metrics = initial_metrics or {
+            "cpu": 0.0,
+            "memory": 0.0,
+            "error_rate": 0.0,
+            "latency_ms": 0.0,
+        }
+        self.apps[app_id] = {
+            "replicas": max(1, int(replicas)),
+            "metrics": {
+                "cpu": float(metrics.get("cpu", 0.0)),
+                "memory": float(metrics.get("memory", 0.0)),
+                "error_rate": float(metrics.get("error_rate", 0.0)),
+                "latency_ms": float(metrics.get("latency_ms", 0.0)),
+            },
+        }
+
+    def ingest_runtime_signals(self, app_id: str, signals: Dict[str, float]):
+        """Update app metrics from control-plane runtime telemetry."""
+        if app_id not in self.apps:
+            self.register_app(app_id)
+
+        current = self.apps[app_id]["metrics"]
+        current["cpu"] = float(signals.get("cpu", current["cpu"]))
+        current["memory"] = float(signals.get("memory", current["memory"]))
+        current["error_rate"] = float(signals.get("error_rate", current["error_rate"]))
+        current["latency_ms"] = float(signals.get("latency", signals.get("latency_ms", current["latency_ms"])))
+        if "replicas" in signals:
+            self.apps[app_id]["replicas"] = max(1, int(signals["replicas"]))
 
     def collect_metrics(self, app_id: str) -> AppMetrics:
         """Collect current metrics for an application."""
         if app_id not in self.apps:
             raise ValueError(f"Unknown app: {app_id}")
 
-        # Simulate realistic metrics with some variation
-        base_cpu = random.uniform(0.1, 0.8)
-        base_mem = random.uniform(0.2, 0.9)
-        base_error = random.uniform(0.0, 0.1)
-        base_latency = random.uniform(50, 500)
-
-        # Add some trends (e.g., if high load, higher metrics)
-        load_factor = random.uniform(0.5, 1.5)
-        cpu = min(1.0, base_cpu * load_factor)
-        mem = min(1.0, base_mem * load_factor)
-        error = min(1.0, base_error * load_factor)
-        latency = base_latency * load_factor
+        metrics = self.apps[app_id]["metrics"]
 
         return AppMetrics(
             app_id=app_id,
-            cpu_usage=cpu,
-            memory_usage=mem,
-            error_rate=error,
-            latency_ms=latency,
+            cpu_usage=float(metrics["cpu"]),
+            memory_usage=float(metrics["memory"]),
+            error_rate=float(metrics["error_rate"]),
+            latency_ms=float(metrics["latency_ms"]),
             replica_count=self.apps[app_id]["replicas"],
             timestamp=time.time()
         )

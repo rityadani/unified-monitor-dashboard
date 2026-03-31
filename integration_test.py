@@ -72,7 +72,21 @@ def test_integration():
     
     logger.info(f"\nDecision History (last 5):")
     for decision in system.decision_history[-5:]:
-        logger.info(f"  - {decision['app_id']}: {decision['decision']} (allowed={decision['allowed']})")
+        logger.info(
+            "  - decision_id=%s app_id=%s action_requested=%s action_emitted=%s orchestrator_acknowledged=%s",
+            decision["decision_id"],
+            decision["app_id"],
+            decision["action_requested"],
+            decision["action_emitted"],
+            decision["orchestrator_acknowledged"] if decision["orchestrator_acknowledged"] is not None else "N/A",
+        )
+
+    logger.info("\n[PHASE 5] Multi-application validation")
+    per_app_counts = {}
+    for decision in system.decision_history:
+        per_app_counts[decision["app_id"]] = per_app_counts.get(decision["app_id"], 0) + 1
+    for app_id, count in per_app_counts.items():
+        logger.info("  - app=%s decision_count=%s", app_id, count)
     
     logger.info(f"\nOrchestrator Execution History:")
     for app_id in system.telemetry.get_all_apps():

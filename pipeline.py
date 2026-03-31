@@ -36,9 +36,11 @@ class DecisionResult:
     environment: str
     decision: Action
     action_allowed: bool
-    orchestrator_acknowledged: bool
+    orchestrator_acknowledged: Optional[bool]
     reason: str
     raw_payload: Dict[str, Any]
+    action_requested: Action = Action.NOOP
+    action_emitted: Action = Action.NOOP
     normalized_payload: Optional[RuntimePayload] = None
     enforcement: Optional[EnforcementResult] = None
     orchestrator_ack: Optional[OrchestratorAck] = None
@@ -175,7 +177,7 @@ class DecisionPipeline:
             environment="",
             decision=Action.NOOP,
             action_allowed=False,
-            orchestrator_acknowledged=False,
+            orchestrator_acknowledged=None,
             reason="",
             raw_payload=payload,
         )
@@ -215,7 +217,7 @@ class DecisionPipeline:
 
         # 3) Generate decision (rule / RL)
         decision, rule_reason = self.decision_generator.generate(normalized, self.app_state_store)
-        result.decision = decision
+        result.action_requested = decision
         result.reason = rule_reason
 
         # 4) Enforce action scope
@@ -232,6 +234,7 @@ class DecisionPipeline:
         else:
             enforcement_action = enforcement.action_emitted
         result.decision = enforcement_action
+        result.action_emitted = enforcement_action
 
         logger.debug(
             "Action scope enforcement: requested=%s allowed=%s emitted=%s",
@@ -276,11 +279,13 @@ class DecisionPipeline:
             self.decision_generator.update_rl_state(normalized, self.app_state_store, enforcement_action, reward)
 
         logger.info(
-            "Decision result: id=%s app=%s action=%s allowed=%s ack=%s",
+            "decision_id=%s app_id=%s action_requested=%s action_emitted=%s orchestrator_acknowledged=%s allowed=%s reason=%s",
             decision_id,
             normalized.app_id,
-            enforcement_action.value,
-            enforcement.action_allowed,
+            result.action_requested.value,
+            result.action_emitted.value,
             ack.acknowledged,
+            enforcement.action_allowed,
+            result.reason,
         )
         return result

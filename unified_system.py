@@ -62,6 +62,8 @@ class UnifiedInfrastructureSystem:
         self.running = False
         self.decision_history = []
         self.processing_thread = None
+        self.started_at = time.time()
+        self.telemetry_events_ingested = 0
 
     def _send_to_orchestrator(self, decision_payload: Dict[str, Any]) -> tuple:
         """Transport: send decision to real orchestrator."""
@@ -90,9 +92,12 @@ class UnifiedInfrastructureSystem:
                         'timestamp': time.time(),
                         'app_id': result.app_id,
                         'decision_id': result.decision_id,
+                        'action_requested': result.action_requested.value,
+                        'action_emitted': result.action_emitted.value,
                         'decision': result.decision.value,
                         'allowed': result.action_allowed,
-                        'reason': result.reason
+                        'reason': result.reason,
+                        'orchestrator_acknowledged': result.orchestrator_acknowledged,
                     })
                     
                     logger.info(
@@ -110,8 +115,9 @@ class UnifiedInfrastructureSystem:
     def get_system_status(self) -> Dict[str, Any]:
         """Get current system state for dashboard."""
         apps_data = {}
+        active_apps = self.telemetry.get_all_apps()
         
-        for app_id in self.telemetry.get_all_apps():
+        for app_id in active_apps:
             try:
                 metrics = self.telemetry.collect_metrics(app_id)
                 last_exec = self.orchestrator.get_last_execution(app_id)
@@ -131,7 +137,14 @@ class UnifiedInfrastructureSystem:
                     'last_action': last_exec.get('action', 'NONE'),
                     'last_action_success': last_exec.get('success', False),
                     'recent_decisions': len(recent_decisions),
-                    'current_decision': recent_decisions[-1]['decision'] if recent_decisions else 'NONE'
+                    'current_decision': recent_decisions[-1]['action_emitted'] if recent_decisions else 'NONE',
+                    'last_decision_status': (
+                        'success'
+                        if recent_decisions and recent_decisions[-1].get('orchestrator_acknowledged') is True
+                        else 'failed' if recent_decisions and recent_decisions[-1].get('orchestrator_acknowledged') is False
+                        else 'not_executed'
+                    ) if recent_decisions else 'unknown',
+                    'decision_history': recent_decisions[-10:],
                 }
             except Exception as e:
                 logger.error(f"Status error for {app_id}: {e}")
@@ -140,8 +153,38 @@ class UnifiedInfrastructureSystem:
         return {
             'running': self.running,
             'total_decisions': len(self.decision_history),
+            'active_applications': active_apps,
+            'telemetry_events_ingested': self.telemetry_events_ingested,
             'apps': apps_data,
-            'uptime_seconds': time.time()
+            'uptime_seconds': round(time.time() - self.started_at, 2),
+        }
+
+    def register_application(
+        self,
+        app_id: str,
+        replicas: int = 1,
+        initial_signals: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Register app in control plane registry for multi-app runtime."""
+        self.telemetry.register_app(
+            app_id=app_id,
+            replicas=replicas,
+            initial_metrics=initial_signals or {},
+        )
+        return {
+            "app_id": app_id,
+            "replicas": replicas,
+            "registered": True,
+        }
+
+    def ingest_telemetry(self, app_id: str, signals: Dict[str, Any]) -> Dict[str, Any]:
+        """Ingest runtime telemetry directly from control-plane emitters."""
+        self.telemetry.ingest_runtime_signals(app_id=app_id, signals=signals)
+        self.telemetry_events_ingested += 1
+        return {
+            "app_id": app_id,
+            "ingested": True,
+            "total_events": self.telemetry_events_ingested,
         }
 
     def start(self):
